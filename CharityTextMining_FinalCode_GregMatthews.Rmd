@@ -1,0 +1,1735 @@
+---
+title: "William Greg Matthews - Final Code"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+
+```{r}
+
+#install.packages("tidyverse")
+#install.packages("tidytext")
+#install.packages("openxlsx")
+#install.packages("wordcloud")
+#install.packages("SnowballC")
+
+# install.packages("stringi")
+# install.packages("stringr")
+# install.packages("topicmodels")
+# install.packages("RCurl")
+# install.packages("topicmodels")
+
+
+library("tidyverse")
+library("tidytext")
+library("lubridate")
+library("stringr")
+library("readr")
+library("dplyr")
+library("ggplot2")
+library("tidyr")
+
+library("RCurl")
+library("openxlsx")
+library("readxl")
+
+
+library("wordcloud")
+#for wordcloud 'acast' function:
+library("reshape2")
+#for Stemming:
+library("SnowballC")
+```
+
+
+```{r}
+#Import tweet datasets from 3 charities
+
+library("RCurl")
+
+
+
+#from github:
+
+wv_git <- getURL("https://raw.githubusercontent.com/g-matthews/capstone/master/wvtweets_all.csv")
+pc_git <- getURL("https://raw.githubusercontent.com/g-matthews/capstone/master/pctweets_all.csv")
+cc_git <- getURL("https://raw.githubusercontent.com/g-matthews/capstone/master/cctweets_all.csv")
+
+wv_2yrs <- read.csv(text=wv_git, header=T)
+pc_2yrs <- read.csv(text=pc_git, header=T)
+cc_2yrs <- read.csv(text=cc_git, header=T)
+
+
+```
+
+
+
+```{r}
+
+#observe that every other row is blank
+
+head(wv_2yrs)
+```
+
+
+
+```{r}
+#filter out blank rows
+#clean $ tag datasets
+
+wv_clean <- wv_2yrs[complete.cases(wv_2yrs),]
+wv_clean$tag <- "wv"
+
+cc_clean <- cc_2yrs[complete.cases(cc_2yrs),]
+cc_clean$tag <- "cc"
+
+pc_clean <- pc_2yrs[complete.cases(pc_2yrs),]
+pc_clean$tag <- "pc"
+
+
+#combine 3 datasets
+
+all_2yrs <- bind_rows(wv_clean, cc_clean, pc_clean)
+
+```
+
+
+
+```{r}
+#preview rows
+head(all_2yrs)
+
+```
+
+```{r}
+#change some variable types
+
+
+all_2yrs$timestamp <- as.Date(all_2yrs$timestamp)
+
+all_2yrs$user <- as.factor(all_2yrs$user)
+all_2yrs$fullname <- as.factor(all_2yrs$fullname)
+all_2yrs$tag <- as.factor(all_2yrs$tag)
+
+```
+
+
+
+```{r}
+#inspect variables
+
+glimpse(all_2yrs)
+summary(all_2yrs)
+
+#Describe:
+#5 charcacter types (1 is a date), 1 num, 4 int 
+```
+
+
+```{r}
+#what are the difference in summary variables, per charity
+
+print("Compassion Canada")
+all_2yrs %>% 
+  filter(tag == 'cc') %>%
+  glimpse() %>%
+  summary()
+  #summarize(length(user), length(fullname))
+
+print("Plan Canada")
+all_2yrs %>% 
+  filter(tag == 'pc') %>%
+  glimpse() %>%
+  summary()
+
+print("World Vision Canada")
+all_2yrs %>% 
+  filter(tag == 'wv') %>%
+  glimpse() %>%
+  summary()
+```
+
+```{r}
+#compare engagement variables
+
+#likes
+all_2yrs %>%
+  group_by(tag) %>%
+  summarize(median(likes), mean(likes), max(likes))
+
+#replies
+all_2yrs %>%
+  group_by(tag) %>%
+  summarize(median(replies), mean(replies), max(replies))
+
+#retweets
+all_2yrs %>%
+  group_by(tag) %>%
+  summarize(median(retweets), mean(retweets), max(retweets))
+```
+
+
+
+```{r}
+
+#subset/select for the most important variables
+sub_all_2yrs <- all_2yrs %>% select(tag, user, tweet.id, timestamp, likes, replies, retweets, text)
+
+summary(all_2yrs)
+
+```
+
+
+
+
+
+```{r}
+
+#Frequency of tweets over time
+
+ggplot(sub_all_2yrs, aes(x = timestamp, fill = tag)) +
+  geom_histogram(position = "identity", bins = 1000, show.legend = FALSE) +
+  facet_wrap(~tag, ncol = 1)
+
+```
+
+
+
+```{r}
+
+#Cleaning text
+
+reg_words <- "([^A-Za-z_\\d#@']|'(?![A-Za-z_\\d#@]))"
+remove_reg <- "&amp;|&lt;|&gt;"
+remove_url <- "https://t.co/[A-Za-z\\d]+|http://[A-Za-z\\d]+www.[A-Za-z\\d]+|&amp;|&lt;|&gt;|RT|https"
+useless_words <- c("compassionca", "compassion", "plancanada", "planglobal", "vision", "nz", "worldvisionlac", "worldvisioncan", "worldvision", "wvc", "canada", "ca", "ly", "gl", "pic", "instagram", "facebook", "twitter", "www", "http", "html", "blog", "wvi", "org", "utm_source", "utm_medium", "plan", "el", "diario", "de", "world", "lac", "paper", "li", "int'l","goo", "gle", "bit", "youtube")
+
+
+# tidy_tweets_1 <- sub_all_2yrs %>%
+#   filter(!str_detect(text, "^RT")) %>%
+#   mutate(text = str_replace_all(text, "https://t.co/[A-Za-z\\d]+|http://[A-Za-z\\d]+|&amp;|&lt;|&gt;|RT|https", "")) %>%
+#   unnest_tokens(word, text, token = "regex", pattern = reg_words) %>%
+#   filter(!word %in% stop_words$word,
+#          str_detect(word, "[a-z]"))
+
+tidy_tweets <- sub_all_2yrs %>%
+  filter(!str_detect(text, "^RT")) %>%
+  mutate(text = str_remove_all(text, remove_reg)) %>%
+  mutate(text = str_remove_all(text, remove_url)) %>%
+  unnest_tokens(word, text, token = "regex", pattern = reg_words) %>%
+  filter(!word %in% stop_words$word,
+         !word %in% str_remove_all(stop_words$word, "'"),
+         str_detect(word, "[a-z]"))
+
+
+#remove mentions, hashtags, and useless words
+tidy_tweets_cleaned <- tidy_tweets %>% 
+  filter(!str_detect(word, "^@"),
+         !str_detect(word, "^#"),
+         !str_detect(word, paste(useless_words, collapse='|')))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+#calculate word frequencies for each charity
+
+frequency <- tidy_tweets_cleaned %>% 
+  group_by(tag) %>% 
+  count(word, sort = TRUE) %>% 
+  left_join(tidy_tweets %>% 
+              group_by(tag) %>% 
+              summarise(total = n())) %>%
+  mutate(freq = n/total)
+
+frequency
+
+```
+
+```{r}
+#spread for plotting
+
+frequency_spread <- frequency %>% 
+  select(tag, word, freq) %>% 
+  spread(tag, freq) %>%
+  arrange(cc, pc, wv)
+
+frequency_spread
+
+```
+
+```{r}
+#compare Compassion Canada with World Vision
+
+library(scales)
+
+ggplot(frequency_spread, aes(cc, wv)) +
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.25, height = 0.25) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  geom_abline(color = "red")
+
+#("Words near the line are used with about equal frequencies by cc and wv, while words far away from the line are used much more by one charity compared to the other.")
+
+```
+
+```{r}
+#compare Plan Canada with World Vision
+
+ggplot(frequency_spread, aes(pc, wv)) +
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.25, height = 0.25) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  geom_abline(color = "red")
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+#COMPARING WORD USAGE (UNIQUE)
+
+#clean and count
+
+word_ratios_cc <- tidy_tweets_cleaned %>%
+  count(word, tag) %>%
+  group_by(word) %>%
+  filter(sum(n) >= 10) %>%
+  ungroup() %>%
+  spread(tag, n, fill = 0) %>%
+  mutate_if(is.numeric, funs((. + 1) / (sum(.) + 1))) %>%
+  mutate(logratio = log(cc / wv)) %>%
+  arrange(desc(logratio))
+
+word_ratios_pc <- tidy_tweets_cleaned %>%
+  count(word, tag) %>%
+  group_by(word) %>%
+  filter(sum(n) >= 10) %>%
+  ungroup() %>%
+  spread(tag, n, fill = 0) %>%
+  mutate_if(is.numeric, funs((. + 1) / (sum(.) + 1))) %>%
+  mutate(logratio = log(pc / wv)) %>%
+  arrange(desc(logratio))
+
+
+```
+
+```{r}
+#words equally as likely: cc & wv
+
+word_ratios_cc %>% 
+  arrange(abs(logratio))
+
+```
+
+
+```{r}
+#words equally as likely: pc & wv
+
+word_ratios_pc %>% 
+  arrange(abs(logratio))
+
+```
+
+
+
+```{r}
+#Top 15 most distinctive words: cc & wv
+
+word_ratios_cc %>%
+  group_by(logratio < 0) %>%
+  top_n(15, abs(logratio)) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, logratio)) %>%
+  ggplot(aes(word, logratio, fill = logratio < 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  ylab("log odds ratio (cc/wv)") +
+  scale_fill_discrete(name = "", labels = c("Compassion", "World Vision"))
+
+```
+
+
+
+```{r}
+#Top 15 most distinctive words: pc & wv
+
+word_ratios_pc %>%
+  group_by(logratio < 0) %>%
+  top_n(15, abs(logratio)) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, logratio)) %>%
+  ggplot(aes(word, logratio, fill = logratio < 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  ylab("log odds ratio (cc/wv)") +
+  scale_fill_discrete(name = "", labels = c("Plan", "World Vision"))
+
+
+```
+
+
+
+```{r}
+
+#most common words
+
+charity_cnt <- tidy_tweets_cleaned %>% count(tag, word, sort = TRUE) %>% ungroup()
+
+charity_total <- charity_cnt %>% group_by(tag) %>% summarize(total = sum(n))
+
+charity_cnt <- left_join(charity_cnt, charity_total)
+
+charity_cnt
+
+#((conclusion: not very helpful; probably need to do more cleanning...but maybe there's an easier way: 'unique' words))
+
+```
+
+
+
+
+
+```{r}
+
+#tf-idf
+
+unique_words <- charity_cnt %>% bind_tf_idf(word, tag, n)
+
+unique_words %>% select(-total) %>% arrange(desc(tf_idf))
+
+```
+
+
+
+```{r}
+#visualize high tf-idf words
+
+unique_words %>% 
+  arrange(desc(tf_idf)) %>%
+  mutate(word = factor(word, levels = rev(unique(word)))) %>% 
+  group_by(tag) %>% 
+  top_n(15) %>% 
+  ungroup %>%
+  ggplot(aes(word, tf_idf, fill = tag)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "tf-idf") +
+  facet_wrap(~tag, ncol = 1, scales = "free") +
+  coord_flip()
+
+```
+
+
+
+
+
+
+
+
+```{r}
+#CHANGES IN WORD USE
+
+#group and count words in 1-month periods
+
+words_by_time <- tidy_tweets_cleaned %>%
+  mutate(time_floor = floor_date(timestamp, unit = "1 month")) %>%
+  count(time_floor, tag, word) %>%
+  group_by(tag, time_floor) %>%
+  mutate(time_total = sum(n)) %>%
+  group_by(tag, word) %>%
+  mutate(word_total = sum(n)) %>%
+  ungroup() %>%
+  rename(count = n) %>%
+  filter(word_total > 40)
+
+words_by_time
+
+```
+
+
+```{r}
+#convert to format: little dataframes per word
+
+nested_data <- words_by_time %>%
+  nest(-word, -tag) 
+
+nested_data
+```
+
+
+```{r}
+#apply modeling procedure to each: asking "Was a given word mentioned in a given time bin? Yes or no? How does the count of word mentions depend on time?""
+
+library(purrr)
+
+nested_models <- nested_data %>%
+  mutate(models = map(data, ~ glm(cbind(count, time_total) ~ time_floor, ., 
+                                  family = "binomial")))
+
+nested_models
+```
+
+```{r}
+#pull out the slopes for each of these models and find the important ones
+#apply an adjustment to the p-values for multiple comparisons
+
+library(broom)
+
+slopes <- nested_models %>%
+  unnest(map(models, tidy)) %>%
+  filter(term == "time_floor") %>%
+  mutate(adjusted.p.value = p.adjust(p.value))
+
+
+#find most important slopes
+
+top_slopes <- slopes %>% 
+  filter(adjusted.p.value < 0.01)
+
+top_slopes
+```
+
+```{r}
+#visualize results: Compassion Canada
+
+words_by_time %>%
+  inner_join(top_slopes, by = c("word", "tag")) %>%
+  filter(tag == "cc") %>%
+  ggplot(aes(time_floor, count/time_total, color = word)) +
+  geom_line(size = 1.3) +
+  labs(x = NULL, y = "Word frequency")
+
+```
+
+```{r}
+#visualize results: Plan Canada
+
+words_by_time %>%
+  inner_join(top_slopes, by = c("word", "tag")) %>%
+  filter(tag == "pc") %>%
+  ggplot(aes(time_floor, count/time_total, color = word)) +
+  geom_line(size = 1.3) +
+  labs(x = NULL, y = "Word frequency")
+```
+
+```{r}
+#visualize results: World Vision Canada
+
+words_by_time %>%
+  inner_join(top_slopes, by = c("word", "tag")) %>%
+  filter(tag == "wv") %>%
+  ggplot(aes(time_floor, count/time_total, color = word)) +
+  geom_line(size = 1.3) +
+  labs(x = NULL, y = "Word frequency")
+```
+
+
+
+
+
+
+
+```{r}
+#SENTIMENT
+
+
+head(sentiments)
+
+cnt_stmt <- distinct(sentiments, sentiment, .keep_all=TRUE)
+cnt_stmt
+
+stmts <- unique(sentiments$sentiment)
+stmts
+```
+
+
+
+
+
+```{r}
+#sentiment score over time
+
+sent_score <- tidy_tweets_cleaned %>% inner_join(get_sentiments("bing")) %>% count(tag, index = timestamp, sentiment) %>% spread(sentiment, n, fill=0) %>% mutate(sentiment = positive - negative)
+
+
+ggplot(sent_score, aes(index, sentiment, fill=tag)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~tag, ncol=1, scales="free_x")
+
+```
+
+
+
+
+
+```{r}
+#Label positive & negative sentiment words
+
+tidy_tweets_bing <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("bing")) %>%
+  group_by(tag) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+```
+
+```{r}
+#Plot most positive sentiment words per charity
+
+tidy_tweets_bing %>%
+  filter(sentiment == 'positive') %>%
+  group_by(tag) %>%
+  top_n(10) %>%
+  ungroup %>%
+  #mutate(word = reorder(word, n)) %>%
+  ggplot(aes(reorder(word,n), n, fill = tag)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~tag, ncol = 1, scales = "free") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+
+```
+
+```{r}
+#Plot most negative sentiment words per charity
+
+tidy_tweets_bing %>%
+  filter(sentiment == 'negative') %>%
+  group_by(tag) %>%
+  top_n(10) %>%
+  ungroup %>%
+  #mutate(word = reorder(word, n)) %>%
+  ggplot(aes(reorder(word,n), n, fill = tag)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~tag, ncol = 1, scales = "free") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+```
+
+
+
+```{r}
+#WORDCLOUDS 
+
+
+library(wordcloud)
+library(reshape2)
+
+
+#World Vision
+tidy_tweets_cleaned %>%
+  filter(tag == "wv") %>%
+  anti_join(stop_words) %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+
+
+```
+
+
+```{r}
+#Plan Canada
+tidy_tweets_cleaned %>%
+  filter(tag == "pc") %>%
+  anti_join(stop_words) %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+```
+
+```{r}
+#Compassion Canada
+tidy_tweets_cleaned %>%
+  filter(tag == "cc") %>%
+  anti_join(stop_words) %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+```
+
+
+
+ 
+
+```{r}
+#Which users have the most negative tweets?
+
+bingnegative <- get_sentiments("bing") %>% 
+  filter(sentiment == "negative")
+
+user_counts <- tidy_tweets_cleaned %>%
+  group_by(tag, user) %>%
+  summarize(words = n())
+
+tidy_tweets_cleaned %>%
+  semi_join(bingnegative) %>%
+  group_by(tag, user) %>%
+  summarize(negativewords = n()) %>%
+  left_join(user_counts, by = c("tag", "user")) %>%
+  filter(words > 5) %>%
+  mutate(ratio = negativewords/words) %>%
+  top_n(1) %>%
+  ungroup()
+
+```
+
+```{r}
+#Show tweets from most negative users
+
+print("Top Negative Users")
+print(sub_all_2yrs$text[sub_all_2yrs$user == "ldbars52"])
+print(sub_all_2yrs$text[sub_all_2yrs$user == "TM6044"])
+print(sub_all_2yrs$text[sub_all_2yrs$user == "CaptRomulan"])
+print(sub_all_2yrs$text[sub_all_2yrs$user == "SergeHalytsky"])
+```
+
+```{r}
+#Which users have the most positive tweets?
+
+bingpositive <- get_sentiments("bing") %>% 
+  filter(sentiment == "positive")
+
+# user_counts <- tidy_tweets_cleaned %>%
+#   group_by(tag, user) %>%
+#   summarize(words = n())
+
+tidy_tweets_cleaned %>%
+  semi_join(bingpositive) %>%
+  group_by(tag, user) %>%
+  summarize(negativewords = n()) %>%
+  left_join(user_counts, by = c("tag", "user")) %>%
+  filter(words > 5) %>%
+  mutate(ratio = negativewords/words) %>%
+  top_n(1) %>%
+  ungroup()
+
+```
+
+```{r}
+#Show tweets from most positive users
+
+print("Top Positive Users")
+print(sub_all_2yrs$text[sub_all_2yrs$user == "StephanPottie62"])
+print(sub_all_2yrs$text[sub_all_2yrs$user == "4creatingfaith"])
+print(sub_all_2yrs$text[sub_all_2yrs$user == "aftabcanada"])
+print(sub_all_2yrs$text[sub_all_2yrs$user == "HiboWardere"])
+print(sub_all_2yrs$text[sub_all_2yrs$user == "KevCooper27"])
+print(sub_all_2yrs$text[sub_all_2yrs$user == "madlad_ldilisi"])
+print(sub_all_2yrs$text[sub_all_2yrs$user == "JamesDurling"])
+
+```
+
+
+
+
+
+```{r}
+#quantify sentiment per tweet, using AFFIN library
+
+sentiment_per_tweet <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(tag, tweet.id) %>%
+  summarize(sentiment = mean(score),
+  words = n()) %>%
+  ungroup() %>%
+  filter(words >= 5)
+
+sentiment_per_tweet %>%
+  arrange(desc(sentiment))
+
+```
+
+
+
+
+
+```{r}
+#top most positive tweets per charity
+
+sentiment_per_tweet %>%
+  arrange(desc(sentiment)) %>%
+  group_by(tag) %>%
+  filter(sentiment >= 3) %>%
+  top_n(3) %>%
+  ungroup() %>%
+  inner_join(sub_all_2yrs, by = "tweet.id") %>%
+  arrange(tag.x) %>%
+  select(tag.x, text)
+
+```
+
+
+```{r}
+#top most negative tweets per charity
+
+sentiment_per_tweet %>%
+  arrange(desc(sentiment)) %>%
+  group_by(tag) %>%
+  filter(sentiment < 1) %>%
+  top_n(3) %>%
+  ungroup() %>%
+  inner_join(sub_all_2yrs, by = "tweet.id") %>%
+  arrange(tag.x) %>%
+  select(tag.x, text)
+  
+```
+
+
+
+
+
+```{r}
+#World Vision: top 10 words associated with "trust"
+
+nrc_trust <- get_sentiments("nrc") %>% 
+  filter(sentiment == "trust")
+
+wv_trust <- tidy_tweets_cleaned %>% 
+  filter(tag == "wv") %>% 
+  inner_join(nrc_trust) %>% 
+  count(word, sort = TRUE)
+
+head(wv_trust, n=10)
+
+
+
+#Compassion Canada: top 10 words associated with "trust"
+
+cc_trust <- tidy_tweets_cleaned %>% 
+  filter(tag == "cc") %>% 
+  inner_join(nrc_trust) %>% count(word, sort = TRUE)
+
+head(cc_trust, n=10)
+
+
+
+#Plan Canada: top 10 words associated with "trust"
+
+pc_trust <- tidy_tweets_cleaned %>% 
+  filter(tag == "pc") %>% 
+  inner_join(nrc_trust) %>% count(word, sort = TRUE)
+
+head(pc_trust, n=10)
+
+
+
+
+```
+
+
+
+```{r}
+#What sentiments are in the NRC library?
+NRC <- get_sentiments("nrc")
+
+unique(NRC$sentiment)
+```
+
+
+```{r}
+#Label tweets with NRC library sentiments
+
+tidy_tweets_nrc <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  group_by(tag) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+```
+
+```{r}
+#Plot most trust words per charity
+
+tidy_tweets_nrc %>%
+  filter(sentiment == 'trust') %>%
+  group_by(tag) %>%
+  top_n(10) %>%
+  ungroup %>%
+  #mutate(word = reorder(word, n)) %>%
+  ggplot(aes(reorder(word,n), n, fill = tag)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~tag, ncol = 1, scales = "free") +
+  labs(y = "Contribution to trust",
+       x = NULL) +
+  coord_flip()
+
+```
+
+```{r}
+#Plot most 'disgust' words per charity
+
+tidy_tweets_nrc %>%
+  filter(sentiment == 'disgust') %>%
+  group_by(tag) %>%
+  top_n(10) %>%
+  ungroup %>%
+  #mutate(word = reorder(word, n)) %>%
+  ggplot(aes(reorder(word,n), n, fill = tag)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~tag, ncol = 1, scales = "free") +
+  labs(y = "Contribution to disgust",
+       x = NULL) +
+  coord_flip()
+```
+
+```{r}
+#Plot most 'anger' words per charity
+
+tidy_tweets_nrc %>%
+  filter(sentiment == 'anger') %>%
+  group_by(tag) %>%
+  top_n(10) %>%
+  ungroup %>%
+  #mutate(word = reorder(word, n)) %>%
+  ggplot(aes(reorder(word,n), n, fill = tag)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~tag, ncol = 1, scales = "free") +
+  labs(y = "Contribution to anger",
+       x = NULL) +
+  coord_flip()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+#N-GRAMs
+
+
+tidy_bigrams2 <- sub_all_2yrs %>%
+mutate(text = str_replace_all(text, "https://t.co/[A-Za-z\\d]+|http://[A-Za-z\\d]+|&amp;|&lt;|&gt;|RT|https", "")) %>%
+  unnest_tokens(bigram, text, token="ngrams", n=2)
+
+
+bigrams_separated <- tidy_bigrams2 %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+
+bigrams_filtered <- bigrams_separated %>%
+   filter(!word1 %in% stop_words$word,
+         !word1 %in% str_remove_all(stop_words$word, "'"),
+         str_detect(word1, "[a-z]"),
+         !str_detect(word1, paste(useless_words, collapse='|'))) %>%
+  
+   filter(!word2 %in% stop_words$word,
+         !word2 %in% str_remove_all(stop_words$word, "'"),
+         str_detect(word2, "[a-z]"),
+         !str_detect(word2, paste(useless_words, collapse='|'))) 
+  
+  
+#New bigrams count
+bigrams_count2 <- bigrams_filtered %>%
+  count(word1, word2, sort=TRUE) 
+
+bigrams_count2
+
+
+
+#bring them back together
+bigrams2_united <- bigrams_filtered %>% 
+    unite(bigram, word1, word2, sep = " ")
+
+
+bigrams_count3 <- bigrams2_united %>%
+  count(bigram, sort=TRUE) 
+#%>% mutate(bigram = reorder(bigram, n))
+
+bigrams_count3
+
+```
+
+```{r}
+#visualize bigrams
+
+bigrams2_united %>%
+  group_by(tag) %>%
+  count(bigram, sort=TRUE) %>%
+  top_n(10,n) %>%
+  arrange(n) %>%
+  ungroup() %>%
+  mutate(bigram = reorder(bigram, n)) %>%
+  ggplot(aes(bigram, n, fill=tag)) +
+geom_col(show.legend = FALSE) +
+facet_wrap(~ tag, scales = "free", ncol = 1) +
+coord_flip() +
+  labs(x = NULL,
+       y = "bigram count per charity")
+```
+
+
+
+
+
+```{r}
+
+#Tri-grams
+
+
+tidy_trigrams <- sub_all_2yrs %>%
+mutate(text = str_replace_all(text, "https://t.co/[A-Za-z\\d]+|http://[A-Za-z\\d]+|&amp;|&lt;|&gt;|RT|https", "")) %>%
+  unnest_tokens(trigram, text, token="ngrams", n=3)
+
+
+trigrams_separated <- tidy_trigrams %>%
+  separate(trigram, c("word1", "word2", "word3"), sep = " ")
+
+
+trigrams_filtered <- trigrams_separated %>%
+   filter(!word1 %in% stop_words$word,
+         !word1 %in% str_remove_all(stop_words$word, "'"),
+         str_detect(word1, "[a-z]"),
+         !str_detect(word1, paste(useless_words, collapse='|'))) %>%
+  
+   filter(!word2 %in% stop_words$word,
+         !word2 %in% str_remove_all(stop_words$word, "'"),
+         str_detect(word2, "[a-z]"),
+         !str_detect(word2, paste(useless_words, collapse='|'))) %>%
+
+   filter(!word3 %in% stop_words$word,
+         !word3 %in% str_remove_all(stop_words$word, "'"),
+         str_detect(word3, "[a-z]"),
+         !str_detect(word3, paste(useless_words, collapse='|'))) 
+
+
+
+#bring them back together
+trigrams_united <- trigrams_filtered %>% 
+    unite(trigram, word1, word2, word3, sep = " ")
+
+
+#count
+
+trigrams_count <- trigrams_united %>%
+  count(trigram, sort=TRUE) 
+#%>% mutate(bigram = reorder(bigram, n))
+
+trigrams_count
+
+```
+
+```{r}
+#visualize trigrams
+
+trigrams_united %>%
+  group_by(tag) %>%
+  count(trigram, sort=TRUE) %>%
+  top_n(10,n) %>%
+  arrange(n) %>%
+  ungroup() %>%
+  mutate(trigram = reorder(trigram, n)) %>%
+  ggplot(aes(trigram, n, fill=tag)) +
+geom_col(show.legend = FALSE) +
+facet_wrap(~ tag, scales = "free", ncol = 1) +
+coord_flip() +
+  labs(x = NULL,
+       y = "trigram count per charity")
+```
+
+
+
+
+```{r}
+#look at context of specific n-grams
+
+#child
+
+bigrams_filtered %>%
+  filter(word1 == "child") %>%
+  count(tag, word2, sort = TRUE)
+
+```
+
+```{r}
+#refugees
+
+bigrams_filtered %>%
+  filter(word2 == "refugees") %>%
+  count(tag, word1, sort = TRUE)
+```
+
+
+
+
+
+
+
+N-GRAMS: TF-IDF/UNIQUE WORDS
+
+
+
+```{r}
+#tf-idf bi-grams: 
+
+
+bigram_tf_idf <- bigrams2_united %>%
+  count(tag, bigram) %>%
+  bind_tf_idf(bigram,tag,n) %>%
+  arrange(desc(tf_idf))
+
+bigram_tf_idf
+
+```
+
+```{r}
+#visualize high tf-idf bi-grams
+
+bigram_tf_idf %>% 
+  arrange(desc(tf_idf)) %>%
+  mutate(word = factor(bigram, levels = rev(unique(bigram)))) %>% 
+  group_by(tag) %>% 
+  top_n(15) %>% 
+  ungroup %>%
+  ggplot(aes(reorder(bigram, tf_idf), tf_idf, fill = tag)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "tf-idf") +
+  facet_wrap(~tag, ncol = 1, scales = "free") +
+  coord_flip()
+```
+
+
+
+```{r}
+#tf-idf tri-grams: 
+
+trigram_tf_idf <- trigrams_united %>%
+  count(tag, trigram) %>%
+  bind_tf_idf(trigram,tag,n) %>%
+  arrange(desc(tf_idf))
+
+trigram_tf_idf
+
+```
+
+
+```{r}
+#visualize high tf-idf tri-grams
+
+trigram_tf_idf %>% 
+  arrange(desc(tf_idf)) %>%
+  mutate(word = factor(trigram, levels = rev(unique(trigram)))) %>% 
+  group_by(tag) %>% 
+  top_n(15) %>% 
+  ungroup %>%
+  ggplot(aes(reorder(trigram, tf_idf), tf_idf, fill = tag)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "tf-idf") +
+  facet_wrap(~tag, ncol = 1, scales = "free") +
+  coord_flip()
+```
+
+
+
+
+
+
+
+
+```{r}
+#TOPIC MODELING 
+
+
+#include only words that occur at least 30 times
+tidy_tweets_cleaned_freq <- tidy_tweets_cleaned %>%
+  group_by(word) %>%
+  mutate(word_total = n()) %>%
+  ungroup() %>%
+  filter(word_total > 30)
+
+#Turn data into term-document matrix
+tt_dtm <- tidy_tweets_cleaned_freq %>%
+  unite(tag, user, tweet.id) %>%
+  count(tag, word) %>%
+  cast_dtm(tag, word, n)
+
+```
+
+
+
+```{r}
+#LDA method
+
+library("topicmodels")
+
+tt_lda <- LDA(tt_dtm, k=6, control=list(seed=2016))
+
+```
+
+
+```{r}
+#what 6 topic-groups did it extract?
+
+tt_lda %>%
+  tidy() %>%
+  group_by(topic) %>%
+  top_n(8, beta) %>%
+  ungroup() %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free_y") +
+  coord_flip()
+```
+
+
+```{r}
+#try just 3
+
+tt_lda_3 <- LDA(tt_dtm, k=3, control=list(seed=2016))
+```
+
+
+```{r}
+#what 3 topic-groups did it extract?
+
+tt_lda_3 %>%
+  tidy() %>%
+  group_by(topic) %>%
+  top_n(8, beta) %>%
+  ungroup() %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free_y") +
+  coord_flip()
+```
+
+
+
+
+
+
+
+
+
+```{r}
+#FAVORITES AND RETWEETS
+
+```
+
+```{r}
+#find total number of retweets per charity
+
+totals <- tidy_tweets_cleaned %>% 
+  group_by(tag, tweet.id) %>% 
+  summarise(rts = first(retweets)) %>% 
+  group_by(tag) %>% 
+  summarise(total_rts = sum(rts))
+
+totals
+```
+
+```{r}
+#find mean number of retweets for each word and charity
+
+#((try different 'uses' #s; and mean vs. median))
+
+
+
+word_by_rts <- tidy_tweets_cleaned %>% 
+  group_by(tweet.id, word, tag) %>% 
+  summarise(rts = first(retweets)) %>% 
+  group_by(tag, word) %>% 
+  summarise(retweets = mean(rts), uses = n()) %>%
+  left_join(totals) %>%
+  filter(retweets != 0) %>%
+  ungroup()
+
+word_by_rts %>% 
+  filter(uses >= 2) %>%
+  arrange(desc(retweets))
+```
+
+```{r}
+#plot words that have the highest mean retweets for each charity
+
+word_by_rts %>%
+  filter(uses >= 10) %>%
+  group_by(tag) %>%
+  top_n(10, retweets) %>%
+  arrange(retweets) %>%
+  ungroup() %>%
+  mutate(word = factor(word, unique(word))) %>%
+  ungroup() %>%
+  ggplot(aes(word, retweets, fill = tag)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ tag, scales = "free", ncol = 1) +
+  coord_flip() +
+  labs(x = NULL, 
+       y = "Mean # of retweets for tweets containing each word")
+```
+
+
+
+```{r}
+#Similar: which words led to more likes?
+
+totals <- tidy_tweets_cleaned %>% 
+  group_by(tag, tweet.id) %>% 
+  summarise(lks = first(likes)) %>% 
+  group_by(tag) %>% 
+  summarise(total_favs = sum(lks))
+
+word_by_lks <- tidy_tweets_cleaned %>% 
+  group_by(tweet.id, word, tag) %>% 
+  summarise(lks = first(likes)) %>% 
+  group_by(tag, word) %>% 
+  summarise(likes = mean(lks), uses = n()) %>%
+  left_join(totals) %>%
+  filter(likes != 0) %>%
+  ungroup()
+
+```
+
+```{r}
+#visualize
+
+word_by_lks %>%
+  filter(uses >= 5) %>%
+  group_by(tag) %>%
+  top_n(10, likes) %>%
+  arrange(likes) %>%
+  ungroup() %>%
+  mutate(word = factor(word, unique(word))) %>%
+  ungroup() %>%
+  ggplot(aes(word, likes, fill = tag)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ tag, scales = "free", ncol = 1) +
+  coord_flip() +
+  labs(x = NULL, 
+       y = "which words led to more likes?")
+```
+
+
+
+
+
+
+
+```{r}
+#((-Investigate which words / sentiments got the most likes, replies, & retweets))
+
+
+```
+
+
+```{r}
+#Frequency of likes per day over time
+
+sub_all_2yrs %>%
+  group_by(tag, timestamp) %>%
+  count(likes, sort = TRUE) %>%
+  ungroup() %>%
+ggplot(aes(x = timestamp, fill = tag)) +
+  geom_histogram(position="identity", bins=900, show.legend = FALSE) +
+  facet_wrap(~tag, ncol = 1)
+
+```
+
+
+
+
+```{r}
+#Is there a relationship between the sentiment score and likes, replies, or retweets?
+
+sentiment_per_tweet2 <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(tag, tweet.id) %>%
+  summarize(sentiment = mean(score),
+  words = n()) %>%
+  ungroup()
+
+cleaned_join_affinScore <- left_join(sub_all_2yrs, sentiment_per_tweet2, by="tweet.id") %>%
+  filter(!is.na(sentiment))
+
+
+#visualize in a corrplot
+library(corrplot)
+
+sent_score_num <- cleaned_join_affinScore %>%
+  select(sentiment, likes, replies, retweets)
+
+sent_score_num_cor <- cor(sent_score_num)
+
+corrplot(sent_score_num_cor, method="ellipse", type="lower", number.cex=0.6, tl.srt=20, tl.cex=0.9, addCoef.col="black")
+
+
+```
+
+
+
+
+
+```{r}
+#What was the avg sentiment for the tweets with the most likes?
+
+#sentiments of top tweets with most # of likes, per charity
+sentiments_top_likes <- cleaned_join_affinScore %>% 
+  group_by(tag.x) %>%
+  arrange(desc(likes)) %>%
+  ungroup()
+ 
+#sentiment score of most-liked tweets about Compassion Canada
+sentiments_top_likes %>%
+  filter(tag.x == "cc") %>%
+  select(tag.x, user, likes, sentiment, text)
+
+```
+
+```{r}
+#sentiment score of most-liked tweets about Plan Canada
+
+sentiments_top_likes %>%
+  filter(tag.x == "pc") %>%
+  select(tag.x, user, likes, sentiment, text)
+```
+
+```{r}
+#sentiment score of most-liked tweets about World Vision Canada
+
+sentiments_top_likes %>%
+  filter(tag.x == "wv") %>%
+  select(tag.x, user, likes, sentiment, text)
+```
+
+```{r}
+#plot
+
+sentiments_top_likes %>%
+  group_by(tag.x) %>%
+  top_n(100) %>%
+  ungroup %>%
+  #mutate(word = reorder(word, n)) %>%
+  ggplot(aes(sentiment,likes, fill = tag.x)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~tag.x, ncol = 1, scales = "free") +
+  labs(y = "Sentiment scores of most-liked tweets",
+       x = NULL) 
+#+ coord_flip()
+
+
+```
+
+
+
+
+```{r}
+
+  #sentiments of top tweets with most # of RETWEETS, per charity
+sentiments_top_likes <- cleaned_join_affinScore %>% 
+  group_by(tag.x) %>%
+  arrange(desc(retweets)) %>%
+  ungroup()
+ 
+#sentiment score of most-liked tweets about Compassion Canada
+sentiments_top_likes %>%
+  filter(tag.x == "cc") %>%
+  select(tag.x, user, retweets, sentiment, text)
+```
+
+```{r}
+#sentiment score of most-retweeted tweets about Plan Canada
+sentiments_top_likes %>%
+  filter(tag.x == "pc") %>%
+  select(tag.x, user, retweets, sentiment, text)
+```
+
+
+```{r}
+#sentiment score of most-retweeted tweets about World Vision Canada
+sentiments_top_likes %>%
+  filter(tag.x == "wv") %>%
+  select(tag.x, user, retweets, sentiment, text)
+```
+
+
+```{r}
+#plot
+
+sentiments_top_likes %>%
+  group_by(tag.x) %>%
+  top_n(100) %>%
+  ungroup %>%
+  #mutate(word = reorder(word, n)) %>%
+  ggplot(aes(sentiment,retweets, fill = tag.x)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~tag.x, ncol = 1, scales = "free") +
+  labs(y = "Sentiment scores of most-retweeted tweets",
+       x = NULL) 
+#+ coord_flip()
+```
+
+
+
+
+
+
+```{r}
+#Which NRC sentiments are present in the most liked and retweeted tweets?
+
+#What sentiments are in the NRC library?
+NRC <- get_sentiments("nrc")
+
+unique(NRC$sentiment)
+```
+
+
+
+
+```{r}
+#create flag fields for NRC sentiments
+
+#subset each word/sentiment pair, then join back to the main dataset
+sub_trust <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(sentiment=="trust") %>%
+  mutate(trust.present = 1) %>%
+  select(tweet.id, trust.present)
+
+sub_fear <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(sentiment=="fear") %>%
+  mutate(fear.present = 1)%>%
+  select(tweet.id, fear.present)
+
+sub_negative <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(sentiment=="negative") %>%
+  mutate(negative.present = 1)%>%
+  select(tweet.id, negative.present)
+
+sub_sadness <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(sentiment=="sadness") %>%
+  mutate(sadness.present = 1)%>%
+  select(tweet.id, sadness.present)
+
+sub_anger <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(sentiment=="anger") %>%
+  mutate(anger.present = 1)%>%
+  select(tweet.id, anger.present)
+
+sub_surprise <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(sentiment=="surprise") %>%
+  mutate(surprise.present = 1)%>%
+  select(tweet.id, surprise.present)
+
+sub_positive <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(sentiment=="positive") %>%
+  mutate(positive.present = 1)%>%
+  select(tweet.id, positive.present)
+
+sub_disgust <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(sentiment=="disgust") %>%
+  mutate(disgust.present = 1)%>%
+  select(tweet.id, disgust.present)
+
+sub_joy <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(sentiment=="joy") %>%
+  mutate(joy.present = 1) %>%
+  select(tweet.id, joy.present)
+
+sub_anticipation <- tidy_tweets_cleaned %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(sentiment=="anticipation") %>%
+  mutate(anticipation.present = 1) %>%
+  select(tweet.id, anticipation.present)
+
+
+
+cleaned_with_flags1 <- sub_all_2yrs %>%
+  left_join(sub_trust, by="tweet.id") 
+cleaned_with_flags2 <- sub_all_2yrs %>%
+  left_join(sub_fear, by="tweet.id") 
+cleaned_with_flags3 <- sub_all_2yrs %>%
+  left_join(sub_negative, by="tweet.id")
+cleaned_with_flags4 <- sub_all_2yrs %>%
+  left_join(sub_sadness, by="tweet.id")
+cleaned_with_flags5 <- sub_all_2yrs %>%
+  left_join(sub_anger, by="tweet.id") 
+cleaned_with_flags6 <- sub_all_2yrs %>%
+  left_join(sub_surprise, by="tweet.id")
+cleaned_with_flags7 <- sub_all_2yrs %>%
+  left_join(sub_positive, by="tweet.id")
+cleaned_with_flags8 <- sub_all_2yrs %>%
+  left_join(sub_disgust, by="tweet.id") 
+cleaned_with_flags9 <- sub_all_2yrs %>%
+  left_join(sub_joy, by="tweet.id") 
+cleaned_with_flags10 <- sub_all_2yrs %>%
+  left_join(sub_anticipation, by="tweet.id")
+
+cleaned_with_flags <- cleaned_with_flags1 %>%
+  inner_join(cleaned_with_flags2, by=c("tag", "user", "tweet.id", "timestamp", "likes", "replies", "retweets", "text")) %>%
+  distinct(tweet.id, .keep_all = TRUE)
+
+cleaned_with_flags <- cleaned_with_flags %>%
+  inner_join(cleaned_with_flags3, by=c("tag", "user", "tweet.id", "timestamp", "likes", "replies", "retweets", "text")) %>%
+  distinct(tweet.id, .keep_all = TRUE)
+
+cleaned_with_flags <- cleaned_with_flags %>%
+  inner_join(cleaned_with_flags4, by=c("tag", "user", "tweet.id", "timestamp", "likes", "replies", "retweets", "text")) %>%
+  distinct(tweet.id, .keep_all = TRUE)
+
+cleaned_with_flags <- cleaned_with_flags %>%
+  inner_join(cleaned_with_flags5, by=c("tag", "user", "tweet.id", "timestamp", "likes", "replies", "retweets", "text")) %>%
+  distinct(tweet.id, .keep_all = TRUE)
+
+cleaned_with_flags <- cleaned_with_flags %>%
+  inner_join(cleaned_with_flags6, by=c("tag", "user", "tweet.id", "timestamp", "likes", "replies", "retweets", "text")) %>%
+  distinct(tweet.id, .keep_all = TRUE)
+
+cleaned_with_flags <- cleaned_with_flags %>%
+  inner_join(cleaned_with_flags7, by=c("tag", "user", "tweet.id", "timestamp", "likes", "replies", "retweets", "text")) %>%
+  distinct(tweet.id, .keep_all = TRUE)
+
+cleaned_with_flags <- cleaned_with_flags %>%
+  inner_join(cleaned_with_flags8, by=c("tag", "user", "tweet.id", "timestamp", "likes", "replies", "retweets", "text")) %>%
+  distinct(tweet.id, .keep_all = TRUE)
+
+cleaned_with_flags <- cleaned_with_flags %>%
+  inner_join(cleaned_with_flags9, by=c("tag", "user", "tweet.id", "timestamp", "likes", "replies", "retweets", "text")) %>%
+  distinct(tweet.id, .keep_all = TRUE)
+
+cleaned_with_flags <- cleaned_with_flags %>%
+  inner_join(cleaned_with_flags10, by=c("tag", "user", "tweet.id", "timestamp", "likes", "replies", "retweets", "text")) %>%
+  distinct(tweet.id, .keep_all = TRUE)
+
+
+#convert NAs to zeros
+cleaned_with_flags[is.na(cleaned_with_flags)] <- 0
+
+
+#cleanup variables
+rm(cleaned_with_flags1, cleaned_with_flags2, cleaned_with_flags3, cleaned_with_flags4, cleaned_with_flags5, cleaned_with_flags6, cleaned_with_flags7, cleaned_with_flags8, cleaned_with_flags9, cleaned_with_flags10)
+
+# str(cleaned_with_flags)
+# head(cleaned_with_flags)
+# str(sub_anticipation)
+# str(sub_all_2yrs)
+
+
+```
+
+
+
+```{r}
+#see which sentiments are present in most-liked tweets
+
+cleaned_with_flags %>%
+  arrange(desc(likes)) %>%
+  select(tag, user, likes, replies, retweets, text, 9:18) %>%
+  head(10)
+
+nrc_likes <- cleaned_with_flags %>%
+  arrange(desc(likes)) %>%
+  select(tag, user, likes, 9:18) %>%
+  head(10)
+  
+#most have Trust, Positive, & Joy
+  
+```
+
+
+```{r}
+#see which sentiments are present in most-retweeted tweets
+
+cleaned_with_flags %>%
+  arrange(desc(retweets)) %>%
+  select(tag, user, likes, replies, retweets, text, 9:18) %>%
+  head(10)
+  
+#still mostly Positive, but Fear & Sadness present as well
+```
+
+
+```{r}
+#see which sentiments are present in most replied-to tweets
+
+cleaned_with_flags %>%
+  arrange(desc(replies)) %>%
+  select(tag, user, likes, replies, retweets, text, 9:18) %>%
+  head(10)
+  
+#mostly just positive
+```
+
+
+
+
+```{r}
+#visualize in a corrplot
+
+library(corrplot)
+
+cleaned_with_flags_num <- cleaned_with_flags %>%
+  select(likes, replies, retweets, 9:18)
+
+cleaned_with_flags_cor <- cor(cleaned_with_flags_num, method="spearman")
+
+corrplot(cleaned_with_flags_cor, method="ellipse", type="lower", number.cex=0.6, tl.srt=20, tl.cex=0.9, addCoef.col="black")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
